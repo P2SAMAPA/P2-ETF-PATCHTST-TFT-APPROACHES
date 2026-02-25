@@ -10,6 +10,10 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore")
 
+# --- Print darts version for debugging ---
+import darts
+print(f"📦 Using darts version: {darts.__version__}")
+
 # --- Robust imports for TFT and PatchTST ---
 try:
     from darts.models import TFTModel
