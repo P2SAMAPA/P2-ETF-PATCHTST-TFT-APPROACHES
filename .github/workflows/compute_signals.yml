@@ -35,6 +35,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install --upgrade -r requirements-train.txt
 
+      - name: Show installed packages
+        run: pip list
+
+      - name: Force reinstall darts with verbose output
+        run: |
+          pip uninstall -y darts
+          pip install --no-cache-dir --verbose darts[torch]==0.28.0 einops==0.7.0
+
+      - name: Verify darts files
+        run: |
+          python -c "
+import darts
+import os
+darts_path = os.path.dirname(darts.__file__)
+print('darts installed at:', darts_path)
+print('Searching for patch files:')
+import glob
+patch_files = glob.glob(os.path.join(darts_path, '**', '*patch*'), recursive=True)
+if patch_files:
+    for f in patch_files:
+        print(' -', f)
+else:
+    print('No patch files found.')
+          "
+
       - name: Debug darts installation
         run: python debug_darts.py
 
