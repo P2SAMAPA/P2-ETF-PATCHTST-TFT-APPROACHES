@@ -20,10 +20,14 @@ try:
 except ImportError:
     from darts.models.forecasting.tft_model import TFTModel
 
+# PatchTST may be in different locations
 try:
     from darts.models import PatchTSTModel
 except ImportError:
-    from darts.models.forecasting.patchtst_model import PatchTSTModel
+    try:
+        from darts.models.forecasting.patchtst_model import PatchTSTModel
+    except ImportError:
+        from darts.models.forecasting.patchtst import PatchTSTModel
 
 # --- Configuration ---
 GITLAB_URL = "https://gitlab.com"
