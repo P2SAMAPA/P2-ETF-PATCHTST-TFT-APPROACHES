@@ -1,0 +1,6 @@
+darts
+yfinance
+python-gitlab
+streamlit
+pandas
+torch
