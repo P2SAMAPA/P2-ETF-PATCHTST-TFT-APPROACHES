@@ -1,9 +1,11 @@
 import darts
 import inspect
 import os
+import sys
 
 print('darts version:', darts.__version__)
 print('darts path:', darts.__file__)
+print('Python executable:', sys.executable)
 
 # List files in forecasting directory
 forecasting_path = os.path.join(os.path.dirname(darts.__file__), 'models', 'forecasting')
@@ -15,21 +17,39 @@ if os.path.exists(forecasting_path):
 else:
     print('Path not found:', forecasting_path)
 
+# Show what's in __init__.py of forecasting
+print('\nContents of darts/models/forecasting/__init__.py:')
+init_path = os.path.join(forecasting_path, '__init__.py')
+if os.path.exists(init_path):
+    with open(init_path, 'r') as f:
+        lines = f.readlines()
+        for line in lines[:20]:  # first 20 lines
+            print('   ', line.rstrip())
+else:
+    print('__init__.py not found.')
+
 # Now try to list all classes available in darts.models.forecasting
-print('\nClasses in darts.models.forecasting:')
+print('\nClasses in darts.models.foreaching (via __all__):')
 try:
     from darts.models import forecasting
-    forecasting_classes = [name for name, obj in inspect.getmembers(forecasting) if inspect.isclass(obj)]
-    for cls in sorted(forecasting_classes):
-        print(' -', cls)
+    if hasattr(forecasting, '__all__'):
+        print('__all__ =', forecasting.__all__)
+    else:
+        print('No __all__ attribute.')
+    # Also try dir()
+    all_members = [name for name in dir(forecasting) if not name.startswith('_')]
+    print('Non-private members:', all_members)
 except Exception as e:
     print('Could not inspect forecasting module:', e)
 
-# Specifically look for any class with "patch" in the name (case-insensitive)
-print('\nSearching for any class containing "patch" (case-insensitive):')
+# Search for any class with "patch" in the name
+print('\nSearching for any class containing "patch":')
 try:
     from darts.models import forecasting
-    patch_classes = [name for name, obj in inspect.getmembers(forecasting) if inspect.isclass(obj) and 'patch' in name.lower()]
+    patch_classes = []
+    for name, obj in inspect.getmembers(forecasting):
+        if inspect.isclass(obj) and 'patch' in name.lower():
+            patch_classes.append(name)
     if patch_classes:
         for cls in patch_classes:
             print(' -', cls)
@@ -38,15 +58,18 @@ try:
 except Exception as e:
     print('Error searching:', e)
 
-# Also try to import from darts.models directly
-print('\nTrying direct import from darts.models:')
+# Try to import directly from forecasting module
+print('\nTrying from darts.models.forecasting import * :')
 try:
-    from darts.models import PatchTSTModel
-    print('✅ PatchTSTModel imported from darts.models')
+    from darts.models.forecasting import *
+    print('Imported successfully.')
+    # List what's now in locals()
+    locals_list = [k for k in locals().keys() if not k.startswith('_')]
+    print('Now in namespace:', [k for k in locals_list if 'patch' in k.lower()])
 except Exception as e:
-    print('❌ Failed:', e)
+    print('Failed:', e)
 
-# Try alternative imports
+# Alternative imports
 print('\nTrying alternative imports:')
 alternative_paths = [
     'darts.models.forecasting.patchtst_model',
@@ -62,5 +85,5 @@ for mod_path in alternative_paths:
             print(f'✅ Found PatchTSTModel in {mod_path}')
         else:
             print(f'❌ Module {mod_path} exists but no PatchTSTModel')
-    except ImportError:
-        print(f'❌ Cannot import {mod_path}')
+    except ImportError as e:
+        print(f'❌ Cannot import {mod_path}: {e}')
