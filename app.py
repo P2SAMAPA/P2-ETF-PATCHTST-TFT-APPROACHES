@@ -9,8 +9,8 @@ from io import StringIO
 import engine  # your strategy module
 
 # --- HEADER & BRANDING ---
-st.set_page_config(page_title="ETF PREDICTOR: PATCHTST & TFT", layout="wide")
-st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>PATCHTST and TFT ETF PREDICTOR</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="ETF PREDICTOR: TRANSFORMER & TFT", layout="wide")
+st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>Transformer and TFT ETF PREDICTOR</h1>", unsafe_allow_html=True)
 
 # --- TRADING CALENDAR ---
 def get_next_trading_day():
@@ -45,7 +45,10 @@ def load_signals(model):
         gl_id = st.secrets["GITLAB_PROJECT_ID"]
         gl = gitlab.Gitlab("https://gitlab.com", private_token=gl_token)
         project = gl.projects.get(gl_id)
-        file_name = "signals_patchtst.csv" if model == "PATCHTST" else "signals_tft.csv"
+        if model == "Transformer":
+            file_name = "signals_transformer.csv"
+        else:
+            file_name = "signals_tft.csv"
         file_info = project.files.get(file_path=file_name, ref="main")
         signals = pd.read_csv(StringIO(file_info.decode().decode('utf-8')), index_col=0)
         signals.index = pd.to_datetime(signals.index)
@@ -57,11 +60,10 @@ def load_signals(model):
 # --- SIDEBAR CONTROLS ---
 with st.sidebar:
     st.header("⚙️ Strategy Engine")
-    option = st.radio("Active Model Selection", ["Option A: PATCHTST", "Option B: TFT"])
-    model_name = "PATCHTST" if "Option A" in option else "TFT"
+    option = st.radio("Active Model Selection", ["Option A: Transformer", "Option B: TFT"])
+    model_name = "Transformer" if "Option A" in option else "TFT"
 
     st.subheader("Training Start Year")
-    # Single slider for start year, end fixed at 2025
     start_year = st.slider("Start Year", 2008, 2025, 2008)
     end_year = 2025  # fixed
 
@@ -170,13 +172,13 @@ st.table(audit_trail.iloc[::-1])
 st.divider()
 
 # --- METHODOLOGY SECTION ---
-with st.expander("📘 Methodology: PATCHTST vs TFT"):
+with st.expander("📘 Methodology: Transformer vs TFT"):
     st.markdown("""
-    **PATCHTST (Patch Time Series Transformer)**  
-    A transformer‑based model that processes time series by dividing the sequence into patches (subseries‑level tokens). It captures long‑term dependencies and is efficient for forecasting. In this project, PATCHTST is trained on historical ETF prices to predict the next day's return for each asset; the asset with the highest predicted return is selected.
+    **Transformer (Attention‑based Model)**  
+    A standard transformer architecture adapted for time series forecasting. It uses self‑attention to capture long‑range dependencies and is trained to predict the next day's return for each ETF. The asset with the highest predicted return is selected for the next trading day.
 
     **TFT (Temporal Fusion Transformer)**  
-    An attention‑based architecture designed for interpretable multi‑horizon forecasting. It uses recurrent layers for local processing and self‑attention for long‑term dependencies, with built‑in mechanisms for handling known inputs (e.g., date features). Here, TFT similarly predicts next‑day returns to choose the best ETF.
+    An attention‑based model designed for interpretable multi‑horizon forecasting. It combines recurrent layers for local processing with self‑attention for long‑term dependencies, and includes built‑in mechanisms for handling known inputs (e.g., date features). Here, TFT similarly predicts next‑day returns to choose the best ETF.
 
     Both models are trained in a **walk‑forward** manner: for each day, only data up to that day is used to forecast the next day, simulating a realistic trading environment. Signals are precomputed offline (via GitHub Actions) and served to this dashboard.
     """)
