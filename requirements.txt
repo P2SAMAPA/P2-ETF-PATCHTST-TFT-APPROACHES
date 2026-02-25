@@ -6,3 +6,4 @@ pandas
 plotly
 torch
 scikit-learn
+pandas_market_calendars
