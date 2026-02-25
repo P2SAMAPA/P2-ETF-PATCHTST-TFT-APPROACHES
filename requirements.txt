@@ -3,4 +3,6 @@ yfinance
 python-gitlab
 streamlit
 pandas
+plotly
 torch
+scikit-learn
