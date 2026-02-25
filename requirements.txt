@@ -1,9 +1,6 @@
-darts
-yfinance
-python-gitlab
 streamlit
 pandas
+numpy
 plotly
-torch
-scikit-learn
 pandas_market_calendars
+python-gitlab
