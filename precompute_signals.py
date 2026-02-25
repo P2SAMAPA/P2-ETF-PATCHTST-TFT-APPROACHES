@@ -15,7 +15,7 @@ import darts
 print(f"📦 Using darts version: {darts.__version__}")
 
 # --- Imports for available models ---
-from darts.models import TFTModel, TransformerModel  # TransformerModel is available
+from darts.models import TFTModel, TransformerModel
 
 # --- Configuration ---
 GITLAB_URL = "https://gitlab.com"
@@ -23,7 +23,7 @@ PROJECT_ID = os.getenv('GITLAB_PROJECT_ID')
 GL_TOKEN = os.getenv('GITLAB_API_TOKEN')
 DATA_FILE = "master_data.csv"
 TFT_SIGNALS_FILE = "signals_tft.csv"
-TRANSFORMER_SIGNALS_FILE = "signals_transformer.csv"  # Renamed
+TRANSFORMER_SIGNALS_FILE = "signals_transformer.csv"
 TICKERS = ["TLT", "TBT", "VNQ", "SLV", "GLD"]
 
 def fetch_data_from_gitlab():
@@ -36,6 +36,7 @@ def fetch_data_from_gitlab():
 
 def prepare_series(df, target_ticker):
     series = TimeSeries.from_dataframe(df, value_cols=target_ticker, fill_missing_dates=True, freq='B')
+    # Time covariates: month and day of week, each returns sin/cos components → total 4 features
     covariates = datetime_attribute_timeseries(series, attribute="month", cyclic=True)
     covariates = covariates.stack(datetime_attribute_timeseries(series, attribute="dayofweek", cyclic=True))
     return series, covariates
@@ -45,7 +46,7 @@ def walk_forward_signals(model_class, model_params, df, tickers, start_date=None
         df = df.loc[df.index >= start_date]
     
     dates = df.index
-    min_train = 252 * 2
+    min_train = 252 * 2  # at least 2 years
     signals = []
     
     for i in range(min_train, len(dates)):
@@ -56,15 +57,19 @@ def walk_forward_signals(model_class, model_params, df, tickers, start_date=None
         
         for ticker in tickers:
             series, covariates = prepare_series(train_df, ticker)
-            scaler = Scaler()
-            scaled_series = scaler.fit_transform(series)
-            scaled_covariates = scaler.transform(covariates)
+            
+            # Use separate scalers for target (univariate) and covariates (multivariate)
+            target_scaler = Scaler()
+            scaled_series = target_scaler.fit_transform(series)
+            
+            covariate_scaler = Scaler()
+            scaled_covariates = covariate_scaler.fit_transform(covariates)
             
             model = model_class(**model_params)
             model.fit(scaled_series, past_covariates=scaled_covariates, verbose=False)
             
             pred = model.predict(n=1, series=scaled_series, past_covariates=scaled_covariates)
-            pred = scaler.inverse_transform(pred)
+            pred = target_scaler.inverse_transform(pred)  # only need to inverse transform target
             pred_price = pred.values()[0][0]
             
             last_price = train_df.loc[train_end, ticker]
@@ -97,7 +102,7 @@ def main():
     df = fetch_data_from_gitlab()
     print(f"Data shape: {df.shape}")
     
-    # TFT parameters (unchanged)
+    # TFT parameters
     tft_params = {
         'input_chunk_length': 30,
         'output_chunk_length': 1,
@@ -113,7 +118,7 @@ def main():
         'random_state': 42
     }
     
-    # Transformer parameters (adapted)
+    # Transformer parameters
     transformer_params = {
         'input_chunk_length': 30,
         'output_chunk_length': 1,
@@ -130,7 +135,7 @@ def main():
         'random_state': 42
     }
     
-    start_date = None  # or "2018-01-01"
+    start_date = None  # or "2018-01-01" to limit runtime
     
     print("\n🔮 Generating TFT signals...")
     tft_signals = walk_forward_signals(TFTModel, tft_params, df, TICKERS, start_date)
