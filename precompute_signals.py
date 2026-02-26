@@ -10,11 +10,8 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings("ignore")
 
-# --- Print darts version for debugging ---
-import darts
-print(f"📦 Using darts version: {darts.__version__}")
+print("📦 Using darts version:", __import__('darts').__version__)
 
-# --- Imports for available models ---
 from darts.models import TFTModel, TransformerModel
 
 # --- Configuration ---
@@ -26,61 +23,18 @@ TFT_SIGNALS_FILE = "signals_tft.csv"
 TRANSFORMER_SIGNALS_FILE = "signals_transformer.csv"
 TICKERS = ["TLT", "TBT", "VNQ", "SLV", "GLD"]
 
-def fetch_data_from_gitlab():
+# Checkpoint files (store last processed date per model)
+TFT_CHECKPOINT = "tft_checkpoint.txt"
+TRANSFORMER_CHECKPOINT = "transformer_checkpoint.txt"
+
+def fetch_file_from_gitlab(file_name):
     gl = gitlab.Gitlab(GITLAB_URL, private_token=GL_TOKEN)
     project = gl.projects.get(PROJECT_ID)
-    file_info = project.files.get(file_path=DATA_FILE, ref='main')
-    df = pd.read_csv(StringIO(file_info.decode().decode('utf-8')), index_col=0)
-    df.index = pd.to_datetime(df.index)
-    return df
-
-def prepare_series(df, target_ticker):
-    series = TimeSeries.from_dataframe(df, value_cols=target_ticker, fill_missing_dates=True, freq='B')
-    # Time covariates: month and day of week, each returns sin/cos components → total 4 features
-    covariates = datetime_attribute_timeseries(series, attribute="month", cyclic=True)
-    covariates = covariates.stack(datetime_attribute_timeseries(series, attribute="dayofweek", cyclic=True))
-    return series, covariates
-
-def walk_forward_signals(model_class, model_params, df, tickers, start_date=None):
-    if start_date is not None:
-        df = df.loc[df.index >= start_date]
-    
-    dates = df.index
-    min_train = 252 * 2  # at least 2 years
-    signals = []
-    
-    for i in range(min_train, len(dates)):
-        train_end = dates[i-1]
-        test_date = dates[i]
-        train_df = df.loc[:train_end]
-        pred_returns = {}
-        
-        for ticker in tickers:
-            series, covariates = prepare_series(train_df, ticker)
-            
-            # Use separate scalers for target (univariate) and covariates (multivariate)
-            target_scaler = Scaler()
-            scaled_series = target_scaler.fit_transform(series)
-            
-            covariate_scaler = Scaler()
-            scaled_covariates = covariate_scaler.fit_transform(covariates)
-            
-            model = model_class(**model_params)
-            model.fit(scaled_series, past_covariates=scaled_covariates, verbose=False)
-            
-            pred = model.predict(n=1, series=scaled_series, past_covariates=scaled_covariates)
-            pred = target_scaler.inverse_transform(pred)  # only need to inverse transform target
-            pred_price = pred.values()[0][0]
-            
-            last_price = train_df.loc[train_end, ticker]
-            pred_return = (pred_price - last_price) / last_price
-            pred_returns[ticker] = pred_return
-        
-        best_ticker = max(pred_returns, key=pred_returns.get)
-        signals.append((test_date, best_ticker))
-        print(f"{test_date.date()}: {best_ticker}")
-    
-    return pd.DataFrame(signals, columns=['date', 'signal']).set_index('date')
+    try:
+        file_info = project.files.get(file_path=file_name, ref='main')
+        return file_info.decode().decode('utf-8')
+    except:
+        return None
 
 def upload_to_gitlab(file_name, content):
     gl = gitlab.Gitlab(GITLAB_URL, private_token=GL_TOKEN)
@@ -97,56 +51,146 @@ def upload_to_gitlab(file_name, content):
             'commit_message': f"Add {file_name}"
         })
 
-def main():
-    print("📥 Fetching data from GitLab...")
-    df = fetch_data_from_gitlab()
-    print(f"Data shape: {df.shape}")
+def read_checkpoint(model_name):
+    """Return the last date (as Timestamp) processed for this model, or None."""
+    fname = TFT_CHECKPOINT if model_name == "TFT" else TRANSFORMER_CHECKPOINT
+    content = fetch_file_from_gitlab(fname)
+    if content:
+        try:
+            return pd.to_datetime(content.strip())
+        except:
+            return None
+    return None
+
+def write_checkpoint(model_name, date):
+    """Write the last processed date to a checkpoint file in GitLab."""
+    fname = TFT_CHECKPOINT if model_name == "TFT" else TRANSFORMER_CHECKPOINT
+    upload_to_gitlab(fname, date.strftime('%Y-%m-%d'))
+
+def prepare_series(df, target_ticker):
+    series = TimeSeries.from_dataframe(df, value_cols=target_ticker, fill_missing_dates=True, freq='B')
+    covariates = datetime_attribute_timeseries(series, attribute="month", cyclic=True)
+    covariates = covariates.stack(datetime_attribute_timeseries(series, attribute="dayofweek", cyclic=True))
+    return series, covariates
+
+def predict_next_day(train_df, ticker, model_class, model_params):
+    series, covariates = prepare_series(train_df, ticker)
+    target_scaler = Scaler()
+    scaled_series = target_scaler.fit_transform(series)
+    covariate_scaler = Scaler()
+    scaled_covariates = covariate_scaler.fit_transform(covariates)
     
-    # TFT parameters
+    model = model_class(**model_params)
+    model.fit(scaled_series, past_covariates=scaled_covariates, verbose=False)
+    
+    pred = model.predict(n=1, series=scaled_series, past_covariates=scaled_covariates)
+    pred = target_scaler.inverse_transform(pred)
+    pred_price = pred.values()[0][0]
+    last_price = train_df.loc[train_df.index[-1], ticker]
+    return (pred_price - last_price) / last_price
+
+def process_model(model_name, model_class, model_params, df, start_date):
+    """Process all dates >= start_date, resuming from last checkpoint."""
+    signal_file = TFT_SIGNALS_FILE if model_name == "TFT" else TRANSFORMER_SIGNALS_FILE
+    
+    # Load existing signals if any
+    existing_content = fetch_file_from_gitlab(signal_file)
+    if existing_content:
+        signals_df = pd.read_csv(StringIO(existing_content), index_col=0)
+        signals_df.index = pd.to_datetime(signals_df.index)
+    else:
+        signals_df = pd.DataFrame(columns=['signal'], dtype=object)
+    
+    # Determine last processed date
+    last_processed = read_checkpoint(model_name)
+    if last_processed is None and not signals_df.empty:
+        last_processed = signals_df.index[-1]
+    
+    # All dates in df that are >= start_date and after last_processed
+    all_dates = df.index[df.index >= start_date]
+    if last_processed:
+        all_dates = all_dates[all_dates > last_processed]
+    
+    if len(all_dates) == 0:
+        print(f"No new dates to process for {model_name}.")
+        return
+    
+    min_train = 252 * 2  # need at least 2 years of history
+    for test_date in all_dates:
+        # Ensure enough training data
+        train_end = df.index[df.index < test_date][-1]
+        train_start_idx = df.index.get_loc(train_end) - min_train + 1
+        if train_start_idx < 0:
+            print(f"Not enough training data for {test_date.date()}, skipping.")
+            continue
+        
+        train_df = df.loc[:train_end]
+        print(f"{model_name}: processing {test_date.date()}...")
+        
+        pred_returns = {}
+        for ticker in TICKERS:
+            pred_returns[ticker] = predict_next_day(train_df, ticker, model_class, model_params)
+        
+        best_ticker = max(pred_returns, key=pred_returns.get)
+        signals_df.loc[test_date] = best_ticker
+        
+        # After each day, upload updated signals and checkpoint
+        upload_to_gitlab(signal_file, signals_df.to_csv())
+        write_checkpoint(model_name, test_date)
+        print(f"  -> {best_ticker} (saved)")
+
+def main():
+    print("📥 Fetching master data from GitLab...")
+    df_content = fetch_file_from_gitlab(DATA_FILE)
+    if df_content is None:
+        raise Exception("master_data.csv not found in GitLab")
+    df = pd.read_csv(StringIO(df_content), index_col=0)
+    df.index = pd.to_datetime(df.index)
+    print(f"Data shape: {df.shape}, last date: {df.index[-1].date()}")
+    
+    # Start from 2018 to include pre‑COVID years
+    start_date = pd.to_datetime("2018-01-01")
+    print(f"Processing from {start_date.date()} onward.")
+    
+    # Reduced model parameters for speed (still reasonable)
     tft_params = {
-        'input_chunk_length': 30,
+        'input_chunk_length': 20,
         'output_chunk_length': 1,
         'hidden_size': 32,
         'lstm_layers': 1,
         'num_attention_heads': 2,
         'dropout': 0.1,
         'batch_size': 16,
-        'n_epochs': 5,
+        'n_epochs': 2,
         'optimizer_kwargs': {'lr': 1e-3},
         'add_relative_index': True,
         'force_reset': True,
         'random_state': 42
     }
     
-    # Transformer parameters
     transformer_params = {
-        'input_chunk_length': 30,
+        'input_chunk_length': 20,
         'output_chunk_length': 1,
         'd_model': 64,
         'nhead': 4,
-        'num_encoder_layers': 3,
-        'num_decoder_layers': 3,
+        'num_encoder_layers': 2,
+        'num_decoder_layers': 2,
         'dim_feedforward': 128,
         'dropout': 0.1,
         'batch_size': 16,
-        'n_epochs': 5,
+        'n_epochs': 2,
         'optimizer_kwargs': {'lr': 1e-3},
         'force_reset': True,
         'random_state': 42
     }
     
-    start_date = None  # or "2018-01-01" to limit runtime
+    print("\n🔮 Processing TFT...")
+    process_model("TFT", TFTModel, tft_params, df, start_date)
     
-    print("\n🔮 Generating TFT signals...")
-    tft_signals = walk_forward_signals(TFTModel, tft_params, df, TICKERS, start_date)
+    print("\n🔮 Processing Transformer...")
+    process_model("Transformer", TransformerModel, transformer_params, df, start_date)
     
-    print("\n🔮 Generating Transformer signals...")
-    transformer_signals = walk_forward_signals(TransformerModel, transformer_params, df, TICKERS, start_date)
-    
-    print("\n📡 Uploading to GitLab...")
-    upload_to_gitlab(TFT_SIGNALS_FILE, tft_signals.to_csv())
-    upload_to_gitlab(TRANSFORMER_SIGNALS_FILE, transformer_signals.to_csv())
-    print("✅ Done.")
+    print("✅ All processing complete.")
 
 if __name__ == "__main__":
     main()
